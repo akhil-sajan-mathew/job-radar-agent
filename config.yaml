@@ -1,0 +1,55 @@
+# Roles and skills below are taken from your resume; edit freely.
+profile:
+  target_roles: ["software engineer", "full stack developer", "machine learning engineer", "ai engineer", "data scientist", "backend developer", "graduate engineer"]
+  skills: ["python", "java", "sql", "javascript", "typescript", "react", "next.js", "node.js", "fastapi", "pytorch", "tensorflow", "docker", "postgresql"]
+  experience_max_years: 1
+  resume_path: resume.md
+
+locations:
+  uae:
+    priority: 1
+    cities: ["Dubai", "Abu Dhabi", "Sharjah", "United Arab Emirates"]
+  india:
+    priority: 2
+    cities: ["Kochi", "Bangalore", "Hyderabad", "Chennai", "Remote India"]
+
+filters:
+  include_keywords: ["engineer", "developer", "graduate", "trainee", "associate", "junior", "fresher", "intern", "internship"]
+  exclude_keywords: ["senior", "sr.", "lead", "principal", "staff", "manager", "architect", "head of"]
+  max_job_age_days: 3
+  email_requires_fresher_title: true   # alert emails have no description, so require graduate/intern/junior/etc. in the title
+
+scoring:                         # Gemini via GEMINI_API_KEY; without the key everything that passes the filter is sent
+  model: "gemini-3.1-flash-lite"
+  fallback_model: "gemini-2.5-flash-lite"   # used when the main one answers 503 "high demand"
+  notify_threshold: 65
+  max_jobs_scored_per_run: 60
+
+companies:                       # ATS board tokens; add more over time
+  greenhouse: []                 # boards.greenhouse.io/<token>
+  lever: []                      # jobs.lever.co/<company>
+  ashby: []                      # jobs.ashbyhq.com/<company>
+  smartrecruiters: ["EtihadAirways5"]   # jobs.smartrecruiters.com/<company>; this one is Etihad
+
+# Company portals with their own JSON feed (none of these use Workday; see README)
+portals:
+  emirates: true                 # emiratesgroupcareers.com (Avature behind a custom site)
+  ibm: true                      # careers.ibm.com search API, UAE + India. Undocumented: may break
+
+# Pages to watch for changes ("page changed, check it"). Sites that block non-browser clients
+# (tcs.com answers 403) just count as a failing source.
+page_watch:
+  - {name: "TCS careers (India)", url: "https://www.tcs.com/careers/india", location: "India"}
+
+# JSearch (RapidAPI) free plan: 200 requests/month hard limit.
+# 3 queries x 2 runs/day x 30 days = 180, so the default budget just fits.
+jsearch:
+  queries:                       # at most 3, UAE first (they run in this order)
+    - {query: "software engineer in Dubai", country: "ae"}
+    - {query: "machine learning engineer in United Arab Emirates", country: "ae"}
+    - {query: "software developer fresher in India", country: "in"}
+  date_posted: "3days"
+  job_requirements: ""           # optional JSearch experience filter; "no_experience,under_3_years_experience" left only 1 of ~28 jobs
+  min_hours_between_runs: 10     # hourly workflow, but JSearch fires ~twice a day
+  monthly_limit: 180             # stop calling at this many requests per month
+  warn_at: 150                   # one Telegram warning per month at this count

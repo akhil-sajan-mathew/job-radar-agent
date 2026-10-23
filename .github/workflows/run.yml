@@ -1,0 +1,54 @@
+name: job-radar
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # hourly; JSearch gates itself to ~2 runs/day (config: min_hours_between_runs)
+  workflow_dispatch:
+
+concurrency:
+  group: job-radar
+  cancel-in-progress: false   # overlapping runs queue instead of corrupting state.db
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Restore state from the state branch
+        run: |
+          mkdir -p data
+          git fetch origin state && git show origin/state:state.db > data/state.db || echo "no state yet"
+
+      - name: Run
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_APP_PASSWORD: ${{ secrets.IMAP_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESUME_TEXT: ${{ secrets.RESUME_TEXT }}
+        run: |
+          printf '%s' "$RESUME_TEXT" > resume.md   # resume.md is gitignored, so it travels as a secret
+          python -m job_radar.main
+
+      - name: Save state to the state branch
+        if: success()
+        run: |
+          mkdir /tmp/state && cp data/state.db /tmp/state/state.db && cd /tmp/state
+          git init -q -b state
+          git config user.name "job-radar" && git config user.email "job-radar@users.noreply.github.com"
+          git add state.db && git commit -qm "state $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state

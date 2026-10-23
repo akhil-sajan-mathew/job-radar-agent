@@ -1,0 +1,11 @@
+.env
+resume.md
+data/state.db
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.pdf
+.env.*
+!.env.example
+deploy.ps1
