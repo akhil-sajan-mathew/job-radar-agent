@@ -21,9 +21,21 @@ filters:
 
 scoring:                         # Gemini via GEMINI_API_KEY; without the key everything that passes the filter is sent
   model: "gemini-3.1-flash-lite"
-  fallback_model: "gemini-2.5-flash-lite"   # used when the main one answers 503 "high demand"
+  fallback_model: "gemini-3.5-flash-lite"   # used when the main one answers 503 "high demand" (2.5 is retired)
   notify_threshold: 65
   max_jobs_scored_per_run: 60
+  daily_limit: 500               # free-tier requests/day per model; at the limit jobs count as "score failed"
+  warn_at: 450                   # one Telegram warning per day per model at this count
+
+cover:                           # cover notes for strong matches, sent right after the alerts
+  enabled: true
+  min_score: 80
+  max_per_run: 3                 # up to 4 Gemini requests each (research, draft, review, revision)
+  research: false                # Google Search grounding; 429 "quota exceeded" on the free tier (tested 2026-10-25)
+  budget: 400                    # notes stop at this many requests/day per model; scoring keeps the rest
+
+telegram:
+  webhook: true                  # Cloudflare relay connected 2026-10-25; false + deleteWebhook to go back to polling
 
 companies:                       # ATS board tokens; add more over time
   greenhouse: []                 # boards.greenhouse.io/<token>

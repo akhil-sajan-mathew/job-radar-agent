@@ -114,6 +114,8 @@ def test_login_failure_counts_error():
 @respx.mock
 def test_pipeline_marks_email_only_after_delivery(cfg, monkeypatch):
     tg = respx.post("https://api.telegram.org/botT/sendMessage").respond(500)
+    respx.get("https://api.telegram.org/botT/getUpdates").respond(json={"ok": True, "result": []})
+    cfg.filters.max_job_age_days = 100000  # the fixture emails have fixed dates
     db, client = Db(":memory:"), httpx.Client()
     n = Notifier("T", "C", client)
     monkeypatch.setattr(EmailAlerts, "_connect", lambda self: FakeImap(RAW))

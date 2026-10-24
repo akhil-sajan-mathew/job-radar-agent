@@ -10,7 +10,7 @@ from job_radar.sources.greenhouse import Greenhouse
 from job_radar.sources.jsearch import URL, JSearch
 from job_radar.sources.lever import Lever
 
-NOW = "2026-10-20T10:00:00Z"
+NOW = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()  # stays within max age
 JS = {"data": {"cursor": None, "jobs": [{"job_id": "j1", "job_title": "Graduate Engineer", "employer_name": "Acme",
                 "job_city": "Dubai", "job_country": "AE", "job_apply_link": "http://apply",
                 "job_description": "<p>Python</p>", "job_posted_at_datetime_utc": NOW}]}}
@@ -90,6 +90,7 @@ def test_jsearch_failure_still_counts_and_no_retry(cfg):
 @respx.mock
 def test_pipeline_dedupes_across_runs(cfg):
     respx.get(URL).respond(json=JS)
+    respx.get("https://api.telegram.org/botT/getUpdates").respond(json={"ok": True, "result": []})
     tg = respx.post("https://api.telegram.org/botT/sendMessage").respond(json={"ok": True})
     db, client = Db(":memory:"), httpx.Client()
     env = {"RAPIDAPI_KEY": "k"}
@@ -103,6 +104,7 @@ def test_pipeline_dedupes_across_runs(cfg):
 @respx.mock
 def test_failed_send_is_retried_next_run(cfg):
     respx.get(URL).respond(json=JS)
+    respx.get("https://api.telegram.org/botT/getUpdates").respond(json={"ok": True, "result": []})
     tg = respx.post("https://api.telegram.org/botT/sendMessage").respond(500)
     db, client = Db(":memory:"), httpx.Client()
     n = Notifier("T", "C", client)

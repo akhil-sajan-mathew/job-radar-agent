@@ -65,6 +65,42 @@ With `GEMINI_API_KEY` set (free key from https://aistudio.google.com → Get API
 - Cache: each job is scored once (table `scores`). Per run at most `max_jobs_scored_per_run` (60) are scored, UAE first; the rest wait for the next run. About 4.5 s pause between calls keeps within the free ~15 requests/minute.
 - If scoring fails twice: UAE jobs are sent anyway (marked unscored), India jobs retry next run.
 - The run log prints calls and tokens used. A dry run also scores, so it spends free quota.
+- Daily budget: every Gemini request is counted per model per day (`api_usage`). At `daily_limit` (500) no more requests are sent to that model; one Telegram warning at `warn_at` (450).
+- Posting guard (`job_radar/guard.py`): hidden HTML and invisible characters are removed from descriptions before the model sees them, and text aimed at an AI ("ignore previous instructions") is flagged in the alert.
+
+## Telegram commands
+
+Send these to the bot; each run reads them first (`getUpdates`, no server), so replies come with the next scheduled run, which can be a few hours. Only messages from `TELEGRAM_CHAT_ID` are answered, at most 10 per run.
+
+- `/cover #ref`: a cover note for that job (the `#ref` is the last line of each alert). Reuses a saved note.
+- `/cv #ref`: a one-page PDF CV tailored to that job, sent as a file. Gemini reorders and rewords `resume.md`; code checks that every skill, heading, name and number is in the resume (never the posting), a review call lists unsupported claims, one fix, and a CV that still has an unbacked claim is refused. 2-3 Gemini requests. The header comes from the secrets `CV_NAME` and `CV_CONTACT` (one line, e.g. `+91 ... | you@mail.com | linkedin.com/in/you`), so contact details never enter the repo.
+- `/why #ref`: the full score breakdown.
+- `/pause`, `/resume`: hold or restart alerts. Held jobs stay unsent and go out after `/resume` (if still within `max_job_age_days`).
+- `/status`: previous run time, Gemini use today, JSearch use this month, failing sources.
+
+Alerted postings are saved (table `postings`) so `/cover` works for jobs from earlier runs. Jobs alerted before this feature have no saved text, so their notes are written from the title only.
+
+### Instant replies (optional Cloudflare relay)
+
+`worker/worker.js` is a free Cloudflare Worker: Telegram sends each message to it (webhook), it checks Telegram's secret header and your chat id, starts the workflow with the command as input (`workflow_dispatch`), and acks "⏳ Got it". The run answers only that command (`python -m job_radar.main --command "/status"`, or `$JOB_RADAR_COMMAND`), skipping the job search: about a minute per reply, and about a minute of Actions time each.
+
+1. Fine-grained GitHub token: only this repo, permission **Actions: Read and write**, expiry about 1 year.
+2. Cloudflare: Workers & Pages → Create → Worker → paste `worker/worker.js` → Deploy. Secrets: `TELEGRAM_SECRET` (`TELEGRAM_WEBHOOK_SECRET` from `.env`), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GITHUB_TOKEN`, `GITHUB_REPO` (`owner/job-radar`).
+3. `setWebhook` to the Worker URL with `secret_token`, then set `telegram.webhook: true` in `config.yaml` (Telegram refuses `getUpdates` while a webhook is set).
+
+Undo: `deleteWebhook` and set `telegram.webhook: false`; polling takes over again. A command sent while another run is already queued can be dropped by GitHub (one pending run per concurrency group): resend if no reply in ~5 minutes. When the GitHub token expires the Worker replies "GitHub answered 401".
+
+## Measuring the scorer
+
+1. `python -m job_radar.eval sample` saves ~40 live postings that pass your filters (JSearch excluded, age ignored) to `eval/labels.csv`.
+2. Open it (Excel is fine) and fill the `label` column with `apply` or `skip` for each job, judged as if it were an alert.
+3. `python -m job_radar.eval run` scores the labelled jobs (about 40 Gemini requests, cached in `eval/scores.json` so re-running is free; `--rescore` after a prompt or model change) and prints, per threshold: the share of your `apply` jobs that would alert (catch rate), the share of alerts you'd skip (noise), the best threshold, and the jobs where you and the model disagree most.
+
+`eval/` is gitignored. Most samples come from alert emails, which have no description, so they are scored on the title only, like in real runs.
+
+## Cover notes
+
+For jobs scoring ≥ `cover.min_score` (80), at most `cover.max_per_run` (3) per run, a short cover note follows the alert. The model drafts it from `resume.md` and the posting; code checks that every name and number in it appears in the resume, posting or research; a second call reviews it as the hiring manager; one revision; and a note that still has an unbacked fact is not sent. Up to 4 requests per note, and notes stop at `cover.budget` (400) requests a day so scoring keeps the rest. `cover.research` adds one Google-Search-grounded "why this company" call, but it needs a paid key (free tier answers 429). Read each note before using it: the check stops invented facts, not bland writing.
 
 ## JSearch quota
 

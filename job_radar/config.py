@@ -30,9 +30,23 @@ class Filters(BaseModel):
 
 class Scoring(BaseModel):
     model: str = "gemini-3.1-flash-lite"  # Google AI Studio free tier; any generateContent model name works
-    fallback_model: str = "gemini-2.5-flash-lite"  # tried when the main model is overloaded
+    fallback_model: str = "gemini-3.5-flash-lite"  # tried when the main model is overloaded
     notify_threshold: int = 65
     max_jobs_scored_per_run: int = 60
+    daily_limit: int = 500  # free-tier requests/day per model (AI Studio > Rate Limit)
+    warn_at: int = 450
+
+
+class Cover(BaseModel):
+    enabled: bool = True
+    min_score: int = 80
+    max_per_run: int = 3
+    research: bool = False  # one Google-Search-grounded call per note; not on the free tier
+    budget: int = 400  # notes stop at this many requests/day per model, leaving the rest for scoring
+
+
+class Telegram(BaseModel):
+    webhook: bool = False  # true once the Cloudflare relay is set up: Telegram then refuses getUpdates
 
 
 class Companies(BaseModel):
@@ -72,6 +86,8 @@ class Config(BaseModel):
     locations: Locations
     filters: Filters
     scoring: Scoring = Scoring()
+    cover: Cover = Cover()
+    telegram: Telegram = Telegram()
     companies: Companies = Companies()
     jsearch: JSearch
     portals: Portals = Portals()

@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .guard import clean
+
 Country = Literal["AE", "IN", "OTHER"]
 
 _AE = re.compile(
@@ -68,6 +70,7 @@ class Job(BaseModel):
     salary: str | None = None
     remote: bool | None = None
     match: Match | None = None  # set by the scorer
+    flags: list[str] = []  # posting-guard findings, shown in the alert
 
 
 def make_job(
@@ -83,6 +86,7 @@ def make_job(
     remote: bool | None = None,
 ) -> Job:
     key = f"{source}:{source_id}" if source_id else f"{company}|{title}|{location}".lower()
+    text, flags = clean(description)
     return Job(
         id=hashlib.sha1(key.encode()).hexdigest()[:16],
         source=source,
@@ -91,9 +95,10 @@ def make_job(
         location=location.strip(),
         country=country_from_location(location),
         url=url,
-        description=strip_html(description)[:6000],
+        description=text[:6000],
         posted_at=posted_at,
         fetched_at=datetime.now(timezone.utc),
         salary=salary,
         remote=remote,
+        flags=flags,
     )

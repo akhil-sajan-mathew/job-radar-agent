@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "7 * * * *"   # hourly; JSearch gates itself to ~2 runs/day (config: min_hours_between_runs)
   workflow_dispatch:
+    inputs:
+      command:   # set by the Cloudflare Worker relay (worker/worker.js); empty = a normal run
+        description: "Telegram command to answer instead of a full run, e.g. /status"
+        required: false
+        default: ""
 
 concurrency:
   group: job-radar
@@ -40,6 +45,9 @@ jobs:
           IMAP_APP_PASSWORD: ${{ secrets.IMAP_APP_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RESUME_TEXT: ${{ secrets.RESUME_TEXT }}
+          CV_NAME: ${{ secrets.CV_NAME }}         # /cv header; kept out of the repo
+          CV_CONTACT: ${{ secrets.CV_CONTACT }}   # e.g. "+91 ... | you@mail.com | linkedin.com/in/you"
+          JOB_RADAR_COMMAND: ${{ inputs.command }}   # via env, never pasted into the script: no shell injection
         run: |
           printf '%s' "$RESUME_TEXT" > resume.md   # resume.md is gitignored, so it travels as a secret
           python -m job_radar.main

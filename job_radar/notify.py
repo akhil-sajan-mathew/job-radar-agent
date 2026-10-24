@@ -32,7 +32,9 @@ def format_job(job: Job, now: datetime | None = None) -> str:
         lines.append(f"Why: {m.reason}")
         if m.missing_skills:
             lines.append(f"Missing: {', '.join(m.missing_skills)}")
-    return NL.join(lines + [f"Apply: {job.url}"])
+    if job.flags:
+        lines.append("⚠️ Posting contains hidden or instruction-like text: treat its score with caution")
+    return NL.join(lines + [f"Apply: {job.url}", f"#{job.id[:6]}"])  # the ref for /cover and /why
 
 
 def rank(jobs: list[Job]) -> list[Job]:
@@ -62,6 +64,22 @@ class Notifier:
         time.sleep(PACE)
         return True
 
+    def send_document(self, filename: str, data: bytes, caption: str = "") -> bool:
+        if self.dry:  # written next to you instead; *.pdf is gitignored
+            open(filename, "wb").write(data)
+            print(f"--- would send file {filename} ({len(data)} bytes): {caption} ---")
+            return True
+        try:
+            r = self.client.post(f"https://api.telegram.org/bot{self.token}/sendDocument",
+                                 data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                                 files={"document": (filename, data, "application/pdf")})
+            r.raise_for_status()
+        except httpx.HTTPError as e:  # never log the URL: it contains the bot token
+            log.error("telegram file send failed: %s", type(e).__name__)
+            return False
+        time.sleep(PACE)
+        return True
+
     def notify_jobs(self, jobs: list[Job]) -> list[Job]:
         """Send the top 10 individually plus one summary; returns the jobs actually delivered."""
         jobs = rank(jobs)
@@ -70,7 +88,7 @@ class Notifier:
         listed, lines, size = [], [], 0
         for j in rest:  # Telegram caps a message at 4096 chars; the rest waits for the next run
             score = f"{j.match.score}/100 · " if j.match else ""
-            line = f"{FLAG[j.country]} {score}{j.title} · {j.company} · {j.location}{NL}{j.url}"
+            line = f"{FLAG[j.country]} {score}{j.title} · {j.company} · {j.location} · #{j.id[:6]}{NL}{j.url}"
             if size + len(line) > SUMMARY_CHARS:
                 break
             listed.append(j)

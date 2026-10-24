@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS api_usage (
 CREATE TABLE IF NOT EXISTS emails (message_id TEXT PRIMARY KEY, processed_at TEXT);
 CREATE TABLE IF NOT EXISTS scores (id TEXT PRIMARY KEY, match TEXT, scored_at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, note TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS postings (id TEXT PRIMARY KEY, location TEXT, description TEXT);
 """
 
 
@@ -56,6 +58,40 @@ class Db:
         if self.dry:
             return
         self.conn.execute("INSERT OR REPLACE INTO scores VALUES (?,?,?)", (job_id, match.model_dump_json(), now_iso()))
+        self.conn.commit()
+
+    def save_posting(self, job: Job) -> None:
+        """Kept for alerted jobs only, so /cover can work on a job from an earlier run."""
+        if self.dry:
+            return
+        self.conn.execute("INSERT OR REPLACE INTO postings VALUES (?,?,?)", (job.id, job.location, job.description))
+        self.conn.commit()
+
+    def find_job(self, ref: str) -> tuple[Job, str, str] | None:
+        """(job, status, reason) for the newest job whose id starts with `ref` (the #ref shown in alerts)."""
+        row = self.conn.execute(
+            "SELECT j.id, j.source, j.title, j.company, j.country, j.url, j.status, j.reason, p.location, "
+            "p.description FROM jobs j LEFT JOIN postings p ON p.id = j.id WHERE j.id LIKE ? "
+            "ORDER BY j.first_seen DESC LIMIT 1", (ref + "%",)).fetchone()
+        if not row:
+            return None
+        job = Job(id=row[0], source=row[1], title=row[2], company=row[3], country=row[4], url=row[5],
+                  location=row[8] or "", description=row[9] or "", posted_at=None,
+                  fetched_at=datetime.now(timezone.utc), match=self.get_match(row[0]))
+        return job, row[6], row[7] or ""
+
+    def failing(self) -> dict[str, int]:
+        rows = self.conn.execute("SELECT key, value FROM meta WHERE key LIKE 'fails:%' AND value != '0'").fetchall()
+        return {k.removeprefix("fails:"): int(v) for k, v in rows}
+
+    def get_note(self, job_id: str) -> str | None:
+        row = self.conn.execute("SELECT note FROM notes WHERE id=?", (job_id,)).fetchone()
+        return row[0] if row else None
+
+    def save_note(self, job_id: str, note: str) -> None:
+        if self.dry:
+            return
+        self.conn.execute("INSERT OR REPLACE INTO notes VALUES (?,?,?)", (job_id, note, now_iso()))
         self.conn.commit()
 
     def email_seen(self, message_id: str) -> bool:

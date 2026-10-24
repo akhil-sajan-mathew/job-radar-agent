@@ -3,10 +3,12 @@ import logging
 import os
 from collections import Counter
 
+from .commands import answer, fetch_commands
 from .config import Config, load_config
-from .db import Db
+from .cover import write_note
+from .db import Db, now_iso
 from .filter import fuzzy_duplicates, reject_reason
-from .notify import Notifier, rank
+from .notify import NL, Notifier, rank
 from .scorer import Scorer
 from .sources.adzuna import Adzuna
 from .sources.ashby import Ashby
@@ -58,6 +60,10 @@ def run(cfg: Config, env, db: Db, notifier: Notifier, client, dry: bool = False,
     stats: Counter = Counter()
     batch: dict[str, object] = {}
     processed: list[str] = []
+    if notifier.token and not cfg.telegram.webhook:  # first, so /resume and /pause apply to this run
+        for text in fetch_commands(client, notifier.token, notifier.chat_id, db):
+            answer(text, cfg, db, scorer, notifier)
+            stats["commands"] += 1
     for src in build_sources(cfg, env, client, db, notifier.send, only):
         try:
             jobs = src.fetch()
@@ -83,6 +89,9 @@ def run(cfg: Config, env, db: Db, notifier: Notifier, client, dry: bool = False,
             stats["filtered"] += 1
         else:
             to_notify.append(job)
+            if job.flags:
+                stats["flagged"] += 1
+                log.warning("posting guard: %r at %s: %s", job.title, job.company, "; ".join(job.flags))
     to_notify, dups = fuzzy_duplicates(to_notify, db.notified())
     for job in dups:
         db.save(job, "duplicate", "same company/title/country already seen on another source")
@@ -90,14 +99,22 @@ def run(cfg: Config, env, db: Db, notifier: Notifier, client, dry: bool = False,
     incomplete = False  # jobs left unscored for the next run: their emails must stay unmarked
     if scorer:
         to_notify, incomplete = score_jobs(to_notify, cfg, db, scorer, stats)
-    sent = notifier.notify_jobs(to_notify)
+    if db.get_meta("paused") == "1":  # held jobs stay unsaved (scores cached) and go out after /resume
+        stats["held_paused"] = len(to_notify)
+        sent = []
+    else:
+        sent = notifier.notify_jobs(to_notify)
     for job in sent:
         db.save(job, "notified", "score_failed" if scorer and not job.match else "")
+        db.save_posting(job)
         stats["notified"] += 1
+    if scorer and cfg.cover.enabled:
+        send_notes(sent, cfg, db, scorer, notifier, stats)
     if len(sent) == len(to_notify) and not incomplete:  # else emails stay unmarked, re-read and retried
         for mid in processed:
             db.mark_email(mid)
     # jobs that failed to send stay unsaved, so the next run retries them
+    db.set_meta("last_run", now_iso())
     return stats
 
 
@@ -130,11 +147,26 @@ def score_jobs(jobs, cfg: Config, db: Db, scorer: Scorer, stats: Counter):
         else:
             db.save(job, "low_score", f"{m.score}: {m.reason}")
             stats["low_score"] += 1
-    log.info("scoring: %d calls, %d tokens", calls, scorer.tokens)
+    log.info("scoring: %d calls, %d tokens; gemini today: %d/%d", calls, scorer.tokens,
+             scorer.used_today(scorer.model), scorer.daily_limit)
     return keep, incomplete
 
 
-def build_scorer(cfg: Config, env, client) -> Scorer | None:
+def send_notes(sent, cfg: Config, db: Db, scorer: Scorer, notifier: Notifier, stats: Counter) -> None:
+    """Cover notes for the strongest jobs just alerted, best first; a job never gets two."""
+    c = cfg.cover
+    picks = [j for j in sent if j.match and j.match.score >= c.min_score and db.get_note(j.id) is None]
+    for job in sorted(picks, key=lambda j: -j.match.score)[:c.max_per_run]:
+        note = write_note(scorer, job, c.budget, c.research)
+        if not note:
+            stats["note_failed"] += 1
+            continue
+        if notifier.send(f"✍️ Cover note · {job.title} at {job.company}{NL}{NL}{note}"):
+            db.save_note(job.id, note)
+            stats["notes"] += 1
+
+
+def build_scorer(cfg: Config, env, client, db: Db, warn) -> Scorer | None:
     if not env.get("GEMINI_API_KEY"):
         log.warning("scoring disabled: GEMINI_API_KEY not set (all filtered jobs will be sent)")
         return None
@@ -143,7 +175,8 @@ def build_scorer(cfg: Config, env, client) -> Scorer | None:
     except OSError:
         log.warning("scoring disabled: cannot read %s", cfg.profile.resume_path)
         return None
-    return Scorer(env["GEMINI_API_KEY"], cfg.scoring.model, resume, client, cfg.scoring.fallback_model)
+    s = cfg.scoring
+    return Scorer(env["GEMINI_API_KEY"], s.model, resume, client, s.fallback_model, db, warn, s.daily_limit, s.warn_at)
 
 
 def load_env_file(path: str = ".env") -> None:
@@ -164,6 +197,8 @@ def main() -> None:
     ap.add_argument("--source", help="run one source by name, e.g. ibm, emirates, pagewatch")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--db", default="data/state.db")
+    ap.add_argument("--command", help="answer one Telegram command (e.g. '/status') and exit, no job search; "
+                                      "defaults to $JOB_RADAR_COMMAND, set by the Cloudflare relay")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
@@ -178,7 +213,13 @@ def main() -> None:
     client = new_client()
     db = Db(args.db, dry=args.dry_run)
     notifier = Notifier(env.get("TELEGRAM_BOT_TOKEN", ""), env.get("TELEGRAM_CHAT_ID", ""), client, dry=args.dry_run)
-    stats = run(cfg, env, db, notifier, client, args.dry_run, args.source, build_scorer(cfg, env, client))
+    scorer = build_scorer(cfg, env, client, db, notifier.send)
+    command = (args.command or env.get("JOB_RADAR_COMMAND") or "").strip()
+    if command:
+        answer(command, cfg, db, scorer, notifier)
+        log.info("answered command %s", command.split()[0][:20])
+        return
+    stats = run(cfg, env, db, notifier, client, args.dry_run, args.source, scorer)
     log.info("run summary: %s", dict(sorted(stats.items())))
 
 
